@@ -1,6 +1,7 @@
 /**
  * Norepinefiles Plugin - Beta 5
  * Virtual filesystem stored in localStorage.
+ * Patches terminal input to support Shift+Enter for multiline.
  *
  * Commands:
  *   touch <path>               Create an empty file
@@ -16,6 +17,83 @@
  *   run <path>                 Execute a .nbatch or .js file
  */
 (function () {
+
+    // ==========================================
+    // MULTILINE INPUT PATCH
+    // Replaces the <input> with a <textarea> so
+    // Shift+Enter inserts a newline, Enter submits.
+    // ==========================================
+    (function patchInput() {
+        const oldInput = document.getElementById("tIn");
+        const container = oldInput.parentElement;
+        if (!oldInput || oldInput.tagName === "TEXTAREA") return; // already patched
+
+        // Create textarea to replace input
+        const ta = document.createElement("textarea");
+        ta.id = "tIn";
+        ta.autocomplete = "off";
+        ta.spellcheck = false;
+        ta.rows = 1;
+        ta.style.cssText = `
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--glow);
+            outline: none;
+            font-family: inherit;
+            font-size: 16px;
+            margin-left: 10px;
+            resize: none;
+            overflow: hidden;
+            line-height: 1.5;
+            padding: 0;
+            max-height: 120px;
+            overflow-y: auto;
+        `;
+
+        // Auto-grow to fit content
+        function autoGrow() {
+            ta.style.height = "auto";
+            ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
+        }
+
+        ta.addEventListener("input", autoGrow);
+
+        // Shift+Enter = newline, Enter alone = submit
+        ta.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                const value = ta.value;
+                // Fire the original terminal handler
+                if (typeof window.handle === "function") {
+                    window.handle(value);
+                }
+                ta.value = "";
+                ta.style.height = "auto";
+            } else if (e.key === "Enter" && e.shiftKey) {
+                // Let the newline insert naturally, then grow
+                setTimeout(autoGrow, 0);
+            } else if (e.key === "ArrowUp" && ta.value === "") {
+                // Keep history navigation when box is empty
+                e.preventDefault();
+                const histUp = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true });
+                document.dispatchEvent(histUp);
+            } else if (e.key === "ArrowDown" && ta.value === "") {
+                e.preventDefault();
+                const histDown = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true });
+                document.dispatchEvent(histDown);
+            }
+        });
+
+        // Swap the old input for the textarea
+        container.replaceChild(ta, oldInput);
+        ta.focus();
+
+        // Keep click-to-focus working
+        document.addEventListener("click", () => {
+            if (document.activeElement !== ta) ta.focus();
+        });
+    })();
 
     // ==========================================
     // STORAGE
@@ -201,6 +279,6 @@
         }
     });
 
-    print("[norepinefiles] Filesystem ready.");
+    print("[norepinefiles] Filesystem ready. Shift+Enter for newlines.");
 
 })();
