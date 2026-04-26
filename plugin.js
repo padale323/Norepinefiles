@@ -1,151 +1,206 @@
-(function(){
+/**
+ * Norepinefiles Plugin - Beta 5
+ * Virtual filesystem stored in localStorage.
+ *
+ * Commands:
+ *   touch <path>               Create an empty file
+ *   write <path> <content>     Write content to a file
+ *   append <path> <content>    Append content to a file
+ *   read <path>                Read a file
+ *   rm <path>                  Delete a file
+ *   cp <src> <dest>            Copy a file
+ *   mv <src> <dest>            Move / rename a file
+ *   ls [folder]                List files
+ *   mkdir <folder>             Create a folder
+ *   rmdir <folder>             Remove a folder and all its files
+ *   run <path>                 Execute a .nbatch or .js file
+ */
+(function () {
 
-const PLUGIN_NAME="norepinefiles";
-const COOKIE_NAME="norepinefiles_data";
+    // ==========================================
+    // STORAGE
+    // ==========================================
+    function loadData() {
+        try {
+            const raw = localStorage.getItem("norepinefiles_data");
+            if (!raw) return { files: {} };
+            return JSON.parse(raw);
+        } catch {
+            return { files: {} };
+        }
+    }
 
-function setCookie(name,value,days){
-const d=new Date();
-d.setTime(d.getTime()+(days*24*60*60*1000));
-document.cookie=name+"="+encodeURIComponent(value)+";expires="+d.toUTCString()+";path=/";
-}
+    function saveData(data) {
+        try {
+            localStorage.setItem("norepinefiles_data", JSON.stringify(data));
+        } catch (e) {
+            print(`<span class="danger-text">[norepinefiles] Storage full or unavailable.</span>`, true);
+        }
+    }
 
-function getCookie(name){
-const match=document.cookie.match(new RegExp('(^| )'+name+'=([^;]+)'));
-if(match)return decodeURIComponent(match[2]);
-return null;
-}
+    let data = loadData();
+    function save() { saveData(data); }
 
-function loadData(){
-const raw=getCookie(COOKIE_NAME);
-if(!raw)return{files:{},aliases:{}};
-try{return JSON.parse(raw);}catch{return{files:{},aliases:{}}}
-}
+    // ==========================================
+    // PATH HELPERS
+    // ==========================================
+    function normPath(p) {
+        return p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/|\/$/g, "").trim();
+    }
 
-function saveData(data){
-setCookie(COOKIE_NAME,JSON.stringify(data),365);
-}
+    // ==========================================
+    // COMMANDS
+    // ==========================================
+    window.registerCommand("touch", "Create an empty file. Usage: touch <path>", function (args) {
+        if (!args) return print("Usage: touch <path>");
+        const path = normPath(args);
+        if (!path) return print("Invalid path.");
+        if (data.files.hasOwnProperty(path)) return print(`File already exists: ${path}`);
+        data.files[path] = "";
+        save();
+        print(`Created: ${path}`);
+    });
 
-let data=loadData();
+    window.registerCommand("write", "Write content to a file. Usage: write <path> <content>", function (args) {
+        const idx = args.indexOf(" ");
+        if (idx === -1) return print("Usage: write <path> <content>");
+        const path = normPath(args.slice(0, idx));
+        const content = args.slice(idx + 1);
+        if (!data.files.hasOwnProperty(path)) return print(`File not found: ${path}. Use 'touch' to create it first.`);
+        data.files[path] = content;
+        save();
+        print(`Written: ${path}`);
+    });
 
-function save(){saveData(data)}
+    window.registerCommand("append", "Append content to a file. Usage: append <path> <content>", function (args) {
+        const idx = args.indexOf(" ");
+        if (idx === -1) return print("Usage: append <path> <content>");
+        const path = normPath(args.slice(0, idx));
+        const content = args.slice(idx + 1);
+        if (!data.files.hasOwnProperty(path)) return print(`File not found: ${path}.`);
+        data.files[path] += (data.files[path] ? "\n" : "") + content;
+        save();
+        print(`Appended to: ${path}`);
+    });
 
-function evaluateMath(expr){
-if(!/^[0-9+\-*/(). %]+$/.test(expr))return null;
-try{return Function("return ("+expr+")")()}catch{return null}
-}
+    window.registerCommand("read", "Read a file. Usage: read <path>", function (args) {
+        if (!args) return print("Usage: read <path>");
+        const path = normPath(args);
+        if (!data.files.hasOwnProperty(path)) return print(`File not found: ${path}`);
+        const content = data.files[path];
+        print("<hr>", true);
+        print(content === "" ? "(empty file)" : content);
+        print("<hr>", true);
+    });
 
-commands["touch"]="Create a file. Usage: touch filename";
-commands["write"]="Write text to file. Usage: write filename content";
-commands["read"]="Read file contents. Usage: read filename";
-commands["rm"]="Delete file. Usage: rm filename";
-commands["ls"]="List files.";
-commands["alias"]="Create alias. Usage: alias name command";
-commands["unalias"]="Remove alias. Usage: unalias name";
-commands["aliases"]="List aliases.";
-commands["math"]="Evaluate math expression. Usage: math 2+2";
+    window.registerCommand("rm", "Delete a file. Usage: rm <path>", function (args) {
+        if (!args) return print("Usage: rm <path>");
+        const path = normPath(args);
+        if (!data.files.hasOwnProperty(path)) return print(`File not found: ${path}`);
+        delete data.files[path];
+        save();
+        print(`Deleted: ${path}`);
+    });
 
-api.registerCleanup(()=>{
-delete commands["touch"];
-delete commands["write"];
-delete commands["read"];
-delete commands["rm"];
-delete commands["ls"];
-delete commands["alias"];
-delete commands["unalias"];
-delete commands["aliases"];
-delete commands["math"];
-});
+    window.registerCommand("cp", "Copy a file. Usage: cp <src> <dest>", function (args) {
+        const parts = args.trim().split(" ");
+        if (parts.length < 2) return print("Usage: cp <src> <dest>");
+        const src = normPath(parts[0]);
+        const dest = normPath(parts[1]);
+        if (!data.files.hasOwnProperty(src)) return print(`File not found: ${src}`);
+        if (data.files.hasOwnProperty(dest)) return print(`Destination already exists: ${dest}`);
+        data.files[dest] = data.files[src];
+        save();
+        print(`Copied: ${src} → ${dest}`);
+    });
 
-const originalHandle=handle;
+    window.registerCommand("mv", "Move or rename a file. Usage: mv <src> <dest>", function (args) {
+        const parts = args.trim().split(" ");
+        if (parts.length < 2) return print("Usage: mv <src> <dest>");
+        const src = normPath(parts[0]);
+        let dest = normPath(parts[1]);
+        if (!data.files.hasOwnProperty(src)) return print(`File not found: ${src}`);
+        const destIsFolder = !dest.includes(".") && Object.keys(data.files).some(f => f.startsWith(dest + "/"));
+        if (destIsFolder) {
+            const filename = src.split("/").pop();
+            dest = dest + "/" + filename;
+        }
+        if (data.files.hasOwnProperty(dest)) return print(`Destination already exists: ${dest}`);
+        data.files[dest] = data.files[src];
+        delete data.files[src];
+        save();
+        print(`Moved: ${src} → ${dest}`);
+    });
 
-handle=async function(input){
+    window.registerCommand("ls", "List files. Usage: ls [folder]", function (args) {
+        const filter = args ? normPath(args) : "";
+        const allKeys = Object.keys(data.files).sort();
+        const matches = filter
+            ? allKeys.filter(f => f === filter || f.startsWith(filter + "/"))
+            : allKeys;
+        if (!matches.length) return print(filter ? `No files in: ${filter}` : "No files.");
+        const displayed = new Set();
+        print("<hr>", true);
+        matches.forEach(f => {
+            const relative = filter ? f.slice(filter.length).replace(/^\//, "") : f;
+            const parts = relative.split("/");
+            if (parts.length > 1) {
+                const folder = (filter ? filter + "/" : "") + parts[0];
+                if (!displayed.has(folder)) {
+                    displayed.add(folder);
+                    print(`<span style="color:var(--blue)">📁 ${parts[0]}/</span>`, true);
+                }
+            } else {
+                print(`   📄 ${relative}`);
+            }
+        });
+        print("<hr>", true);
+    });
 
-const raw=input.trim();
-if(!raw)return;
+    window.registerCommand("mkdir", "Create a folder. Usage: mkdir <folder>", function (args) {
+        if (!args) return print("Usage: mkdir <folder>");
+        const path = normPath(args) + "/.keep";
+        if (data.files.hasOwnProperty(path)) return print(`Folder already exists: ${args}`);
+        data.files[path] = "";
+        save();
+        print(`Folder created: ${normPath(args)}/`);
+    });
 
-const parts=raw.split(" ");
-const cmd=parts[0];
-const args=parts.slice(1);
+    window.registerCommand("rmdir", "Remove a folder and all its files. Usage: rmdir <folder>", function (args) {
+        if (!args) return print("Usage: rmdir <folder>");
+        const folder = normPath(args);
+        const toDelete = Object.keys(data.files).filter(f => f === folder || f.startsWith(folder + "/"));
+        if (!toDelete.length) return print(`Folder not found: ${folder}`);
+        toDelete.forEach(f => delete data.files[f]);
+        save();
+        print(`Removed folder and ${toDelete.length} file(s): ${folder}/`);
+    });
 
-if(data.aliases[cmd]){
-return originalHandle(data.aliases[cmd]+" "+args.join(" "));
-}
+    window.registerCommand("run", "Execute a .nbatch or .js file. Usage: run <path>", async function (args) {
+        if (!args) return print("Usage: run <path>");
+        const path = normPath(args);
+        if (!data.files.hasOwnProperty(path)) return print(`File not found: ${path}`);
+        const content = data.files[path];
+        if (!content.trim()) return print(`File is empty: ${path}`);
+        if (path.endsWith(".js")) {
+            try {
+                new Function(content)();
+                print(`Executed: ${path}`);
+            } catch (e) {
+                print(`<span class="danger-text">[Run Error] ${e.message}</span>`, true);
+            }
+        } else if (path.endsWith(".nbatch")) {
+            const lines = content.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+            print(`Running ${lines.length} command(s) from ${path}...`);
+            for (const line of lines) {
+                if (typeof window.handle === "function") await window.handle(line);
+            }
+            print(`Done: ${path}`);
+        } else {
+            print(`Unknown file type. Use .nbatch for command scripts or .js for JavaScript.`);
+        }
+    });
 
-if(cmd==="touch"){
-if(!args[0])return print("Filename required.");
-if(data.files[args[0]])return print("File exists.");
-data.files[args[0]]="";
-save();
-print("File created.");
-return;
-}
-
-if(cmd==="write"){
-if(!args[0])return print("Filename required.");
-if(!data.files.hasOwnProperty(args[0]))return print("File not found.");
-data.files[args[0]]=args.slice(1).join(" ");
-save();
-print("File updated.");
-return;
-}
-
-if(cmd==="read"){
-if(!args[0])return print("Filename required.");
-if(!data.files.hasOwnProperty(args[0]))return print("File not found.");
-print(data.files[args[0]]);
-return;
-}
-
-if(cmd==="rm"){
-if(!args[0])return print("Filename required.");
-if(!data.files.hasOwnProperty(args[0]))return print("File not found.");
-delete data.files[args[0]];
-save();
-print("File removed.");
-return;
-}
-
-if(cmd==="ls"){
-const keys=Object.keys(data.files);
-if(!keys.length)return print("No files.");
-keys.forEach(f=>print(f));
-return;
-}
-
-if(cmd==="alias"){
-if(!args[0]||args.length<2)return print("Usage: alias name command");
-data.aliases[args[0]]=args.slice(1).join(" ");
-save();
-print("Alias added.");
-return;
-}
-
-if(cmd==="unalias"){
-if(!args[0])return print("Alias name required.");
-if(!data.aliases[args[0]])return print("Alias not found.");
-delete data.aliases[args[0]];
-save();
-print("Alias removed.");
-return;
-}
-
-if(cmd==="aliases"){
-const keys=Object.keys(data.aliases);
-if(!keys.length)return print("No aliases.");
-keys.forEach(a=>print(a+" → "+data.aliases[a]));
-return;
-}
-
-if(cmd==="math"){
-const result=evaluateMath(args.join(" "));
-if(result===null)return print("Invalid expression.");
-print(String(result));
-return;
-}
-
-return originalHandle(input);
-};
-
-print("[norepinefiles Loaded] Files, aliases, and math enabled.");
+    print("[norepinefiles] Filesystem ready.");
 
 })();
